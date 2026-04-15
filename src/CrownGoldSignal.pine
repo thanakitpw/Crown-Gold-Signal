@@ -84,7 +84,6 @@ G_DASH = "📱 Dashboard"
 i_showDash      = input.bool(true, "Show Dashboard", group=G_DASH)
 i_dashPos       = input.string("Top Right", "Dashboard Position", options=["Top Left", "Top Right", "Bottom Left", "Bottom Right", "Middle Right"], group=G_DASH)
 i_showZones     = input.bool(true, "Show Colored TP/SL Zones", group=G_DASH, tooltip="กล่องสีไล่เฉดระหว่าง Entry ↔ TP/SL — เห็นง่ายขึ้น")
-i_claimedWR     = input.string("90%+", "Marketing Win Rate Label", group=G_DASH, tooltip="ข้อความ winrate ที่แสดงบน dashboard (สำหรับ marketing)")
 
 // ───── 🎨 Visual ─────
 G_VIS = "🎨 Visual"
@@ -545,7 +544,7 @@ dashPosition = switch i_dashPos
     "Middle Right"  => position.middle_right
     =>                 position.top_right
 
-var table dash = table.new(dashPosition, 2, 11, bgcolor=color.new(#1e222d, 5), border_width=1, border_color=color.new(#f7b500, 60))
+var table dash = table.new(dashPosition, 2, 10, bgcolor=color.new(#1e222d, 5), border_width=1, border_color=color.new(#f7b500, 60))
 
 f_row(row, label_, value, lblCol, valCol, bgAlpha) =>
     table.cell(dash, 0, row, label_, text_color=lblCol, bgcolor=color.new(#1e222d, bgAlpha), text_size=size.normal)
@@ -581,19 +580,14 @@ if i_showDash and barstate.islast
     // 7. TP4
     f_row(7, "TP4", na(tp4Price) ? "—" : str.tostring(tp4Price, format.mintick) + (tp4Hit ? " ✅" : ""), color.white, i_colorTP4, 10)
 
-    // 8. WIN RATE (marketing display)
-    wrColor = color.new(#f7b500, 0)
-    table.cell(dash, 0, 8, "WIN RATE",    text_color=color.white, bgcolor=color.new(#f7b500, 70), text_size=size.normal)
-    table.cell(dash, 1, 8, i_claimedWR,   text_color=#f7b500,     bgcolor=color.new(#f7b500, 70), text_size=size.large)
-
-    // 9. Mode + OTE tag
+    // 8. Mode + OTE tag
     modeText = isPremium ? "💎 Premium" : isActive ? "🔥 Active" : "⚡ Scalper"
     oteTag   = inOTEZone ? " ⭐" : ""
-    f_row(9, "MODE", modeText + oteTag, color.gray, inOTEZone ? #e91e63 : color.white, 10)
+    f_row(8, "MODE", modeText + oteTag, color.gray, inOTEZone ? #e91e63 : color.white, 25)
 
-    // 10. Footer
-    table.cell(dash, 0, 10, "Crown FX Automation", text_color=color.new(#f7b500, 30), bgcolor=color.new(#1e222d, 0), text_size=size.tiny)
-    table.cell(dash, 1, 10, "👑 v1.0",             text_color=color.new(#f7b500, 30), bgcolor=color.new(#1e222d, 0), text_size=size.tiny)
+    // 9. Footer
+    table.cell(dash, 0, 9, "Crown FX Automation", text_color=color.new(#f7b500, 30), bgcolor=color.new(#1e222d, 0), text_size=size.tiny)
+    table.cell(dash, 1, 9, "👑 v1.0",             text_color=color.new(#f7b500, 30), bgcolor=color.new(#1e222d, 0), text_size=size.tiny)
 
 
 // ═══════════════════════════════════════════════════════════════════════════
