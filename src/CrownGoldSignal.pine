@@ -333,7 +333,7 @@ var float tp1Price   = na
 var float tp2Price   = na
 var float tp3Price   = na
 var float tp4Price   = na
-var bool  currentIsBuy = na
+var bool  currentIsBuy = false
 var int   entryBar   = na
 
 // Lines for visualization
