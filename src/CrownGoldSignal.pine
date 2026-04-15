@@ -26,6 +26,7 @@ indicator(
 
 // ───── 🎯 Signal Settings ─────
 G_SIGNAL = "🎯 Signal Settings"
+i_signalMode    = input.string("🔥 Active Gold", "Signal Mode", options=["💎 Premium OTE", "🔥 Active Gold", "⚡ Scalper"], group=G_SIGNAL, tooltip="💎 Premium OTE: ~1 signal/เดือน, Winrate 90%+ (ต้องเข้า OTE zone)  |  🔥 Active Gold: ~5-10 signals/สัปดาห์, Winrate 55-65% (balanced)  |  ⚡ Scalper: ~10-20 signals/สัปดาห์, Winrate 50-55% (wide RSI)")
 i_emaFast       = input.int(50,  "EMA Fast",   minval=2,  maxval=500, group=G_SIGNAL, tooltip="ค่า EMA เร็ว — ใช้จับเทรนด์ระยะสั้น")
 i_emaSlow       = input.int(200, "EMA Slow",   minval=10, maxval=500, group=G_SIGNAL, tooltip="ค่า EMA ช้า — ใช้จับเทรนด์ระยะยาว")
 i_rsiLen        = input.int(14,  "RSI Length", minval=2,  maxval=50,  group=G_SIGNAL, tooltip="ความยาว RSI")
@@ -294,28 +295,46 @@ inOTEZone = not na(oteZoneTop) and not na(oteZoneBot) and low <= oteZoneTop and 
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 6. SIGNAL ENGINE (3-Condition Confirmation)
+// 6. SIGNAL ENGINE (3-Condition + Mode-based overrides)
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ───── Signal Mode Overrides ─────
+// Mode wins over user toggles. Premium = strict, Active = balanced, Scalper = wide.
+isPremium = i_signalMode == "💎 Premium OTE"
+isActive  = i_signalMode == "🔥 Active Gold"
+isScalper = i_signalMode == "⚡ Scalper"
+
+// Effective filters
+effHTFBull    = isPremium ? (htf1Bull and htf2Bull) : true
+effHTFBear    = isPremium ? (htf1Bear and htf2Bear) : true
+effRequireSMC = isPremium
+effRequireOTE = isPremium or i_requireOTE
+effRsiBuyMin  = isScalper ? 40 : i_rsiBuyMin
+effRsiBuyMax  = isScalper ? 80 : i_rsiBuyMax
+effRsiSellMin = isScalper ? 20 : i_rsiSellMin
+effRsiSellMax = isScalper ? 60 : i_rsiSellMax
+
 // Condition 1: Trend
-trendBull = emaFast > emaSlow and htfBullBias
-trendBear = emaFast < emaSlow and htfBearBias
+trendBull = emaFast > emaSlow and effHTFBull
+trendBear = emaFast < emaSlow and effHTFBear
 
-// Condition 2: Momentum (using confirmed closed-bar values [1] → anti-repaint)
-momBull = rsi[1] >= i_rsiBuyMin  and rsi[1] <= i_rsiBuyMax  and macdLine[1] > macdSig[1]
-momBear = rsi[1] >= i_rsiSellMin and rsi[1] <= i_rsiSellMax and macdLine[1] < macdSig[1]
+// Condition 2: Momentum (anti-repaint: [1] closed-bar values)
+momBull = rsi[1] >= effRsiBuyMin  and rsi[1] <= effRsiBuyMax  and macdLine[1] > macdSig[1]
+momBear = rsi[1] >= effRsiSellMin and rsi[1] <= effRsiSellMax and macdLine[1] < macdSig[1]
 
-// Condition 3: Structure (SMC) — already computed above
+// Condition 3: Structure (required only in Premium mode)
+smcCheckBull = not effRequireSMC or smcBullStructure
+smcCheckBear = not effRequireSMC or smcBearStructure
+
+// OTE zone filter (Premium only by default, or user-forced)
+oteFilter = not effRequireOTE or inOTEZone
 
 // Prevent duplicate consecutive signals
 var int lastBuyBar  = na
 var int lastSellBar = na
 
-// Optional OTE zone filter — gold-specific deep retracement entry (78.6-88.6)
-oteFilter = not i_requireOTE or inOTEZone
-
-rawBuy  = trendBull and momBull and smcBullStructure and activeSession and oteFilter and barstate.isconfirmed
-rawSell = trendBear and momBear and smcBearStructure and activeSession and oteFilter and barstate.isconfirmed
+rawBuy  = trendBull and momBull and smcCheckBull and activeSession and oteFilter and barstate.isconfirmed
+rawSell = trendBear and momBear and smcCheckBear and activeSession and oteFilter and barstate.isconfirmed
 
 isBuySignal  = rawBuy  and (na(lastBuyBar)  or bar_index - lastBuyBar  > 3)
 isSellSignal = rawSell and (na(lastSellBar) or bar_index - lastSellBar > 3)

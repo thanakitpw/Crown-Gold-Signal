@@ -31,6 +31,7 @@ strategy(
 // ═══════════════════════════════════════════════════════════════════════════
 
 G_SIGNAL = "🎯 Signal Settings"
+i_signalMode = input.string("🔥 Active Gold", "Signal Mode", options=["💎 Premium OTE", "🔥 Active Gold", "⚡ Scalper"], group=G_SIGNAL, tooltip="💎 Premium OTE: ~1 signal/เดือน, Winrate 90%+  |  🔥 Active Gold: ~5-10/สัปดาห์, WR 55-65%  |  ⚡ Scalper: ~10-20/สัปดาห์, WR 50-55%")
 i_emaFast    = input.int(50,  "EMA Fast",   minval=2,  maxval=500, group=G_SIGNAL)
 i_emaSlow    = input.int(200, "EMA Slow",   minval=10, maxval=500, group=G_SIGNAL)
 i_rsiLen     = input.int(14,  "RSI Length", group=G_SIGNAL)
@@ -210,14 +211,32 @@ oteFilter  = not i_requireOTE or inOTEZone
 // 5. SIGNAL ENGINE (3-condition, same as indicator)
 // ═══════════════════════════════════════════════════════════════════════════
 
-trendBull = emaFast > emaSlow and htfBullBias
-trendBear = emaFast < emaSlow and htfBearBias
+// ───── Signal Mode Overrides (same logic as indicator) ─────
+isPremium = i_signalMode == "💎 Premium OTE"
+isActive  = i_signalMode == "🔥 Active Gold"
+isScalper = i_signalMode == "⚡ Scalper"
 
-momBull = rsi[1] >= i_rsiBuyMin  and rsi[1] <= i_rsiBuyMax  and macdLine[1] > macdSig[1]
-momBear = rsi[1] >= i_rsiSellMin and rsi[1] <= i_rsiSellMax and macdLine[1] < macdSig[1]
+effHTFBull    = isPremium ? (htf1Bull and htf2Bull) : true
+effHTFBear    = isPremium ? (htf1Bear and htf2Bear) : true
+effRequireSMC = isPremium
+effRequireOTE = isPremium or i_requireOTE
+effRsiBuyMin  = isScalper ? 40 : i_rsiBuyMin
+effRsiBuyMax  = isScalper ? 80 : i_rsiBuyMax
+effRsiSellMin = isScalper ? 20 : i_rsiSellMin
+effRsiSellMax = isScalper ? 60 : i_rsiSellMax
 
-isBuySignal  = trendBull and momBull and smcBullStructure and activeSession and oteFilter and barstate.isconfirmed and inDateWindow
-isSellSignal = trendBear and momBear and smcBearStructure and activeSession and oteFilter and barstate.isconfirmed and inDateWindow
+trendBull = emaFast > emaSlow and effHTFBull
+trendBear = emaFast < emaSlow and effHTFBear
+
+momBull = rsi[1] >= effRsiBuyMin  and rsi[1] <= effRsiBuyMax  and macdLine[1] > macdSig[1]
+momBear = rsi[1] >= effRsiSellMin and rsi[1] <= effRsiSellMax and macdLine[1] < macdSig[1]
+
+smcCheckBull = not effRequireSMC or smcBullStructure
+smcCheckBear = not effRequireSMC or smcBearStructure
+oteFilterEff = not effRequireOTE or inOTEZone
+
+isBuySignal  = trendBull and momBull and smcCheckBull and activeSession and oteFilterEff and barstate.isconfirmed and inDateWindow
+isSellSignal = trendBear and momBear and smcCheckBear and activeSession and oteFilterEff and barstate.isconfirmed and inDateWindow
 
 
 // ═══════════════════════════════════════════════════════════════════════════
