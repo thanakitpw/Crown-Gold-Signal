@@ -409,18 +409,17 @@ if newSlHit
 // 8. AUTO FIBONACCI (swing high ↔ swing low with Golden Zone)
 // ═══════════════════════════════════════════════════════════════════════════
 
-var line[]  fibLines  = array.new<line>()
-var label[] fibLabels = array.new<label>()
-var box     fibGoldenBox = na
+var array<line>  fibLines       = array.new<line>()
+var array<label> fibLabels      = array.new<label>()
+var array<box>   fibGoldenBoxes = array.new<box>()   // single-element array (v6 funcs can't reassign globals)
 
 cleanupFib() =>
     while array.size(fibLines) > 0
         line.delete(array.shift(fibLines))
     while array.size(fibLabels) > 0
         label.delete(array.shift(fibLabels))
-    if not na(fibGoldenBox)
-        box.delete(fibGoldenBox)
-        fibGoldenBox := na
+    while array.size(fibGoldenBoxes) > 0
+        box.delete(array.shift(fibGoldenBoxes))
 
 f_drawFib(highestVal, lowestVal, startBar) =>
     cleanupFib()
@@ -439,8 +438,9 @@ f_drawFib(highestVal, lowestVal, startBar) =>
     if i_highlightGolden
         goldTop = highestVal - rng * 0.5
         goldBot = highestVal - rng * 0.618
-        fibGoldenBox := box.new(left=startBar, top=goldTop, right=bar_index + i_lineExtend, bottom=goldBot,
+        gb = box.new(left=startBar, top=goldTop, right=bar_index + i_lineExtend, bottom=goldBot,
              bgcolor=i_colorFibGold, border_color=color.new(#ffb300, 50), xloc=xloc.bar_index)
+        array.push(fibGoldenBoxes, gb)
 
 // Redraw Fib when a new pivot forms
 if i_enableFib and (not na(pivotHigh) or not na(pivotLow))
