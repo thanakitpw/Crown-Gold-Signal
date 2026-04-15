@@ -1,0 +1,248 @@
+//@version=6
+// ═══════════════════════════════════════════════════════════════════════════
+// 👑 Crown Gold Signal — Strategy Version (for Backtest)
+// © 2026 Crown FX Automation. All rights reserved.
+// ═══════════════════════════════════════════════════════════════════════════
+// Backtest-ready version of Crown Gold Signal indicator.
+// Same 3-condition signal logic, with strategy.entry/exit for TradingView
+// Strategy Tester. Use this to validate winrate / PF / max DD before publish.
+// ═══════════════════════════════════════════════════════════════════════════
+
+strategy(
+     title                  = "Crown Gold Signal — Strategy",
+     shorttitle             = "👑 CGS Strategy",
+     overlay                = true,
+     initial_capital        = 10000,
+     default_qty_type       = strategy.percent_of_equity,
+     default_qty_value      = 100,
+     commission_type        = strategy.commission.percent,
+     commission_value       = 0.02,
+     slippage               = 2,
+     pyramiding             = 0,
+     calc_on_every_tick     = false,
+     process_orders_on_close= true,
+     max_lines_count        = 500,
+     max_boxes_count        = 500,
+     max_labels_count       = 500)
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 1. INPUTS (mirrors indicator — plus backtest controls)
+// ═══════════════════════════════════════════════════════════════════════════
+
+G_SIGNAL = "🎯 Signal Settings"
+i_emaFast    = input.int(50,  "EMA Fast",   minval=2,  maxval=500, group=G_SIGNAL)
+i_emaSlow    = input.int(200, "EMA Slow",   minval=10, maxval=500, group=G_SIGNAL)
+i_rsiLen     = input.int(14,  "RSI Length", group=G_SIGNAL)
+i_rsiBuyMin  = input.int(50,  "RSI Buy Min",  group=G_SIGNAL)
+i_rsiBuyMax  = input.int(70,  "RSI Buy Max",  group=G_SIGNAL)
+i_rsiSellMin = input.int(30,  "RSI Sell Min", group=G_SIGNAL)
+i_rsiSellMax = input.int(50,  "RSI Sell Max", group=G_SIGNAL)
+i_macdFast   = input.int(12, "MACD Fast",   group=G_SIGNAL)
+i_macdSlow   = input.int(26, "MACD Slow",   group=G_SIGNAL)
+i_macdSignal = input.int(9,  "MACD Signal", group=G_SIGNAL)
+
+G_MTF = "📊 Multi-Timeframe"
+i_enableMTF = input.bool(true, "Enable HTF Filter", group=G_MTF)
+i_htf1      = input.timeframe("60",  "HTF 1", group=G_MTF)
+i_htf2      = input.timeframe("240", "HTF 2", group=G_MTF)
+
+G_RISK = "🛡️ Risk Management"
+i_atrLen        = input.int(14, "ATR Length", group=G_RISK)
+i_atrMult       = input.float(1.5, "ATR Multiplier (SL)", step=0.1, group=G_RISK)
+i_useSwingSL    = input.bool(true, "Use Swing H/L for SL (if farther)", group=G_RISK)
+i_swingLookback = input.int(10, "Swing Lookback", group=G_RISK)
+i_rrTP1         = input.float(1.0, "TP1 R:R", step=0.1, group=G_RISK)
+i_rrTP2         = input.float(2.0, "TP2 R:R", step=0.1, group=G_RISK)
+i_rrTP3         = input.float(3.0, "TP3 R:R", step=0.1, group=G_RISK)
+i_rrTP4         = input.float(5.0, "TP4 R:R", step=0.1, group=G_RISK)
+
+G_SMC = "🧠 SMC Settings"
+i_enableOB  = input.bool(true, "Use Order Block Structure", group=G_SMC)
+i_enableFVG = input.bool(true, "Use FVG Structure", group=G_SMC)
+i_pivotLen  = input.int(5, "Pivot Lookback", group=G_SMC)
+i_maxZones  = input.int(5, "Max SMC Zones", group=G_SMC)
+
+G_SESSION = "⏰ Session Filter"
+i_enableSession = input.bool(false, "Enable Session Filter", group=G_SESSION)
+i_sessionLondon = input.bool(true, "Include London Session",  group=G_SESSION)
+i_sessionNY     = input.bool(true, "Include New York Session", group=G_SESSION)
+
+G_POS = "📐 Position Management"
+i_tp1Pct = input.float(30, "TP1 Close %", minval=0, maxval=100, group=G_POS, tooltip="ปิดกี่ % ของ position ที่ TP1")
+i_tp2Pct = input.float(30, "TP2 Close %", minval=0, maxval=100, group=G_POS)
+i_tp3Pct = input.float(25, "TP3 Close %", minval=0, maxval=100, group=G_POS)
+// Remaining (~15%) runs to TP4
+
+G_BT = "📅 Backtest Window"
+i_useDateFilter = input.bool(true, "Use Date Range Filter", group=G_BT)
+i_startDate     = input.time(timestamp("2024-01-01 00:00"), "Start Date", group=G_BT)
+i_endDate       = input.time(timestamp("2026-12-31 23:59"), "End Date",   group=G_BT)
+
+inDateWindow = not i_useDateFilter or (time >= i_startDate and time <= i_endDate)
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 2. INDICATORS + MULTI-TF (same as indicator)
+// ═══════════════════════════════════════════════════════════════════════════
+
+emaFast = ta.ema(close, i_emaFast)
+emaSlow = ta.ema(close, i_emaSlow)
+rsi     = ta.rsi(close, i_rsiLen)
+[macdLine, macdSig, _mh] = ta.macd(close, i_macdFast, i_macdSlow, i_macdSignal)
+atr     = ta.atr(i_atrLen)
+
+f_htfBias() =>
+    ef = ta.ema(close, i_emaFast)
+    es = ta.ema(close, i_emaSlow)
+    [ef > es and close > es, ef < es and close < es]
+
+[htf1Bull, htf1Bear] = i_enableMTF ? request.security(syminfo.tickerid, i_htf1, f_htfBias(), lookahead=barmerge.lookahead_off) : [true, true]
+[htf2Bull, htf2Bear] = i_enableMTF ? request.security(syminfo.tickerid, i_htf2, f_htfBias(), lookahead=barmerge.lookahead_off) : [true, true]
+
+htfBullBias = not i_enableMTF or (htf1Bull and htf2Bull)
+htfBearBias = not i_enableMTF or (htf1Bear and htf2Bear)
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 3. SMC (same logic as indicator — structure booleans only, no visual boxes)
+// ═══════════════════════════════════════════════════════════════════════════
+
+pivotHigh = ta.pivothigh(high, i_pivotLen, i_pivotLen)
+pivotLow  = ta.pivotlow (low,  i_pivotLen, i_pivotLen)
+
+var float lastSwingHigh = na
+var float lastSwingLow  = na
+if not na(pivotHigh)
+    lastSwingHigh := pivotHigh
+if not na(pivotLow)
+    lastSwingLow := pivotLow
+
+bosBull = not na(lastSwingHigh) and close > lastSwingHigh and close[1] <= lastSwingHigh
+bosBear = not na(lastSwingLow)  and close < lastSwingLow  and close[1] >= lastSwingLow
+
+var array<float> bullOBTops = array.new<float>()
+var array<float> bullOBBots = array.new<float>()
+var array<float> bearOBTops = array.new<float>()
+var array<float> bearOBBots = array.new<float>()
+
+if i_enableOB and bosBull
+    for i = 1 to 10
+        if close[i] < open[i]
+            array.push(bullOBTops, math.max(open[i], close[i]))
+            array.push(bullOBBots, math.min(low[i],  close[i]))
+            if array.size(bullOBTops) > i_maxZones
+                array.shift(bullOBTops)
+                array.shift(bullOBBots)
+            break
+if i_enableOB and bosBear
+    for i = 1 to 10
+        if close[i] > open[i]
+            array.push(bearOBTops, math.max(high[i], close[i]))
+            array.push(bearOBBots, math.min(open[i], close[i]))
+            if array.size(bearOBTops) > i_maxZones
+                array.shift(bearOBTops)
+                array.shift(bearOBBots)
+            break
+
+var array<float> bullFVGTops = array.new<float>()
+var array<float> bullFVGBots = array.new<float>()
+var array<float> bearFVGTops = array.new<float>()
+var array<float> bearFVGBots = array.new<float>()
+
+if i_enableFVG and low > high[2]
+    array.push(bullFVGTops, low)
+    array.push(bullFVGBots, high[2])
+    if array.size(bullFVGTops) > i_maxZones
+        array.shift(bullFVGTops)
+        array.shift(bullFVGBots)
+if i_enableFVG and high < low[2]
+    array.push(bearFVGTops, low[2])
+    array.push(bearFVGBots, high)
+    if array.size(bearFVGTops) > i_maxZones
+        array.shift(bearFVGTops)
+        array.shift(bearFVGBots)
+
+isTouchingZone(tops, bots) =>
+    touched = false
+    n = array.size(tops)
+    if n > 0
+        for i = 0 to n - 1
+            t = array.get(tops, i)
+            b = array.get(bots, i)
+            if low <= t and high >= b
+                touched := true
+                break
+    touched
+
+smcBullStructure = isTouchingZone(bullOBTops, bullOBBots) or isTouchingZone(bullFVGTops, bullFVGBots) or bosBull
+smcBearStructure = isTouchingZone(bearOBTops, bearOBBots) or isTouchingZone(bearFVGTops, bearFVGBots) or bosBear
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 4. SESSION FILTER
+// ═══════════════════════════════════════════════════════════════════════════
+
+inLondon = not na(time(timeframe.period, "1500-0000", "Asia/Bangkok"))
+inNY     = not na(time(timeframe.period, "2000-0500", "Asia/Bangkok"))
+activeSession = not i_enableSession or ((i_sessionLondon and inLondon) or (i_sessionNY and inNY))
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 5. SIGNAL ENGINE (3-condition, same as indicator)
+// ═══════════════════════════════════════════════════════════════════════════
+
+trendBull = emaFast > emaSlow and htfBullBias
+trendBear = emaFast < emaSlow and htfBearBias
+
+momBull = rsi[1] >= i_rsiBuyMin  and rsi[1] <= i_rsiBuyMax  and macdLine[1] > macdSig[1]
+momBear = rsi[1] >= i_rsiSellMin and rsi[1] <= i_rsiSellMax and macdLine[1] < macdSig[1]
+
+isBuySignal  = trendBull and momBull and smcBullStructure and activeSession and barstate.isconfirmed and inDateWindow
+isSellSignal = trendBear and momBear and smcBearStructure and activeSession and barstate.isconfirmed and inDateWindow
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 6. STRATEGY ORDERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+f_calcSL(isBuy, entry) =>
+    atrSL   = isBuy ? entry - atr * i_atrMult : entry + atr * i_atrMult
+    swingSL = isBuy ? ta.lowest(low, i_swingLookback) : ta.highest(high, i_swingLookback)
+    i_useSwingSL ? (isBuy ? math.min(atrSL, swingSL) : math.max(atrSL, swingSL)) : atrSL
+
+if isBuySignal and strategy.position_size == 0
+    entry = close
+    sl    = f_calcSL(true, entry)
+    risk  = entry - sl
+    tp1   = entry + risk * i_rrTP1
+    tp2   = entry + risk * i_rrTP2
+    tp3   = entry + risk * i_rrTP3
+    tp4   = entry + risk * i_rrTP4
+    strategy.entry("Long", strategy.long)
+    strategy.exit("TP1", from_entry="Long", stop=sl, limit=tp1, qty_percent=i_tp1Pct)
+    strategy.exit("TP2", from_entry="Long", stop=sl, limit=tp2, qty_percent=i_tp2Pct)
+    strategy.exit("TP3", from_entry="Long", stop=sl, limit=tp3, qty_percent=i_tp3Pct)
+    strategy.exit("TP4", from_entry="Long", stop=sl, limit=tp4)
+
+if isSellSignal and strategy.position_size == 0
+    entry = close
+    sl    = f_calcSL(false, entry)
+    risk  = sl - entry
+    tp1   = entry - risk * i_rrTP1
+    tp2   = entry - risk * i_rrTP2
+    tp3   = entry - risk * i_rrTP3
+    tp4   = entry - risk * i_rrTP4
+    strategy.entry("Short", strategy.short)
+    strategy.exit("TP1", from_entry="Short", stop=sl, limit=tp1, qty_percent=i_tp1Pct)
+    strategy.exit("TP2", from_entry="Short", stop=sl, limit=tp2, qty_percent=i_tp2Pct)
+    strategy.exit("TP3", from_entry="Short", stop=sl, limit=tp3, qty_percent=i_tp3Pct)
+    strategy.exit("TP4", from_entry="Short", stop=sl, limit=tp4)
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 7. VISUALS (same arrows as indicator for cross-check)
+// ═══════════════════════════════════════════════════════════════════════════
+
+plotshape(isBuySignal,  "BUY",  shape.triangleup,   location.belowbar, color.new(color.green, 0), size=size.normal)
+plotshape(isSellSignal, "SELL", shape.triangledown, location.abovebar, color.new(color.red,   0), size=size.normal)

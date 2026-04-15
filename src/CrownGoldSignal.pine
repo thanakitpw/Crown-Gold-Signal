@@ -1,0 +1,589 @@
+//@version=6
+// ═══════════════════════════════════════════════════════════════════════════
+// 👑 Crown Gold Signal — Premium TradingView Indicator
+// © 2026 Crown FX Automation. All rights reserved.
+// Licensed to subscribers only. Unauthorized distribution prohibited.
+// ═══════════════════════════════════════════════════════════════════════════
+// Symbol focus : XAUUSD (Gold) + Forex majors (EURUSD, GBPUSD, USDJPY, XAGUSD)
+// Timeframes   : M5, M15, H1, H4 (optimized)
+// Engine       : 3-Condition Confirmation (Trend + Momentum + SMC Structure)
+// Anti-repaint : barstate.isconfirmed + lookahead_off + close[1] crosses
+// Version      : 1.0.0
+// ═══════════════════════════════════════════════════════════════════════════
+
+indicator(
+     title             = "Crown Gold Signal",
+     shorttitle        = "👑 CGS",
+     overlay           = true,
+     max_lines_count   = 500,
+     max_boxes_count   = 500,
+     max_labels_count  = 500)
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 1. INPUTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ───── 🎯 Signal Settings ─────
+G_SIGNAL = "🎯 Signal Settings"
+i_emaFast       = input.int(50,  "EMA Fast",   minval=2,  maxval=500, group=G_SIGNAL, tooltip="ค่า EMA เร็ว — ใช้จับเทรนด์ระยะสั้น")
+i_emaSlow       = input.int(200, "EMA Slow",   minval=10, maxval=500, group=G_SIGNAL, tooltip="ค่า EMA ช้า — ใช้จับเทรนด์ระยะยาว")
+i_rsiLen        = input.int(14,  "RSI Length", minval=2,  maxval=50,  group=G_SIGNAL, tooltip="ความยาว RSI")
+i_rsiBuyMin     = input.int(50,  "RSI Buy Min",  minval=1, maxval=99, group=G_SIGNAL)
+i_rsiBuyMax     = input.int(70,  "RSI Buy Max",  minval=1, maxval=99, group=G_SIGNAL, tooltip="ป้องกัน overbought")
+i_rsiSellMin    = input.int(30,  "RSI Sell Min", minval=1, maxval=99, group=G_SIGNAL, tooltip="ป้องกัน oversold")
+i_rsiSellMax    = input.int(50,  "RSI Sell Max", minval=1, maxval=99, group=G_SIGNAL)
+i_macdFast      = input.int(12, "MACD Fast",   group=G_SIGNAL)
+i_macdSlow      = input.int(26, "MACD Slow",   group=G_SIGNAL)
+i_macdSignal    = input.int(9,  "MACD Signal", group=G_SIGNAL)
+
+// ───── 📊 Multi-Timeframe ─────
+G_MTF = "📊 Multi-Timeframe"
+i_enableMTF     = input.bool(true, "Enable HTF Filter", group=G_MTF, tooltip="กรองสัญญาณให้ตรงกับเทรนด์ Higher TF")
+i_htf1          = input.timeframe("60",  "HTF 1", group=G_MTF, tooltip="Higher timeframe ตัวที่ 1 (default H1)")
+i_htf2          = input.timeframe("240", "HTF 2", group=G_MTF, tooltip="Higher timeframe ตัวที่ 2 (default H4)")
+
+// ───── 🛡️ Risk Management ─────
+G_RISK = "🛡️ Risk Management"
+i_atrLen        = input.int(14, "ATR Length", minval=2, maxval=100, group=G_RISK)
+i_atrMult       = input.float(1.5, "ATR Multiplier (SL)", minval=0.5, maxval=5.0, step=0.1, group=G_RISK, tooltip="ตัวคูณ ATR สำหรับคำนวณ SL")
+i_useSwingSL    = input.bool(true, "Use Swing H/L for SL (if farther)", group=G_RISK, tooltip="ใช้ swing เป็น SL ถ้าไกลกว่า ATR (ปลอดภัยกว่า)")
+i_swingLookback = input.int(10, "Swing Lookback", minval=3, maxval=50, group=G_RISK)
+i_rrTP1         = input.float(1.0, "TP1 R:R", minval=0.5, step=0.1, group=G_RISK)
+i_rrTP2         = input.float(2.0, "TP2 R:R", minval=0.5, step=0.1, group=G_RISK)
+i_rrTP3         = input.float(3.0, "TP3 R:R", minval=0.5, step=0.1, group=G_RISK)
+i_rrTP4         = input.float(5.0, "TP4 R:R (Runner)", minval=0.5, step=0.1, group=G_RISK)
+i_lineExtend    = input.int(50, "Line Extend (bars)", minval=10, maxval=500, group=G_RISK)
+
+// ───── 🧠 SMC Settings ─────
+G_SMC = "🧠 SMC Settings"
+i_enableOB      = input.bool(true, "Show Order Blocks", group=G_SMC)
+i_enableFVG     = input.bool(true, "Show Fair Value Gaps", group=G_SMC)
+i_enableBOS     = input.bool(true, "Show Break of Structure", group=G_SMC)
+i_pivotLen      = input.int(5, "Pivot Lookback", minval=2, maxval=20, group=G_SMC, tooltip="ใช้ในการหา swing H/L สำหรับ OB/BOS")
+i_maxZones      = input.int(5, "Max SMC Zones", minval=1, maxval=20, group=G_SMC, tooltip="จำนวน zone ล่าสุดที่จะเก็บบน chart")
+i_obExtend      = input.int(30, "OB/FVG Extend (bars)", minval=5, maxval=200, group=G_SMC)
+
+// ───── 📐 Fibonacci ─────
+G_FIB = "📐 Fibonacci"
+i_enableFib       = input.bool(true, "Enable Auto Fibonacci", group=G_FIB)
+i_fibLookback     = input.int(50, "Fib Swing Lookback", minval=10, maxval=500, group=G_FIB)
+i_highlightGolden = input.bool(true, "Highlight Golden Zone (0.5-0.618)", group=G_FIB)
+
+// ───── ⏰ Session Filter ─────
+G_SESSION = "⏰ Session Filter"
+i_enableSession = input.bool(false, "Enable Session Filter", group=G_SESSION, tooltip="เทรดเฉพาะ London + NY (ปิดช่วง Asia sideways)")
+i_sessionLondon = input.bool(true, "Include London Session",  group=G_SESSION, tooltip="15:00-00:00 Bangkok")
+i_sessionNY     = input.bool(true, "Include New York Session", group=G_SESSION, tooltip="20:00-05:00 Bangkok")
+
+// ───── 📱 Dashboard ─────
+G_DASH = "📱 Dashboard"
+i_showDash      = input.bool(true, "Show Dashboard", group=G_DASH)
+i_dashPos       = input.string("Top Right", "Dashboard Position", options=["Top Left", "Top Right", "Bottom Left", "Bottom Right", "Middle Right"], group=G_DASH)
+
+// ───── 🎨 Visual ─────
+G_VIS = "🎨 Visual"
+i_showArrows    = input.bool(true, "Show BUY/SELL Arrows", group=G_VIS)
+i_showBigLabel  = input.bool(true, "Show Big 'BUY NOW / SELL NOW' Label", group=G_VIS)
+i_colorEntry    = input.color(color.new(#2962ff, 0),  "Entry Line",  group=G_VIS)
+i_colorSL       = input.color(color.new(#ef5350, 20), "SL Line",     group=G_VIS)
+i_colorTP1      = input.color(color.new(#66bb6a, 50), "TP1 Line",    group=G_VIS)
+i_colorTP2      = input.color(color.new(#66bb6a, 30), "TP2 Line",    group=G_VIS)
+i_colorTP3      = input.color(color.new(#66bb6a, 10), "TP3 Line",    group=G_VIS)
+i_colorTP4      = input.color(color.new(#00e676, 0),  "TP4 Line",    group=G_VIS)
+i_colorBullOB   = input.color(color.new(#26a69a, 80), "Bullish OB",  group=G_VIS)
+i_colorBearOB   = input.color(color.new(#ef5350, 80), "Bearish OB",  group=G_VIS)
+i_colorFVG      = input.color(color.new(color.gray, 70), "FVG",      group=G_VIS)
+i_colorFibGold  = input.color(color.new(#ffb300, 80), "Fib Golden Zone", group=G_VIS)
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 2. INDICATORS (current TF)
+// ═══════════════════════════════════════════════════════════════════════════
+
+emaFast = ta.ema(close, i_emaFast)
+emaSlow = ta.ema(close, i_emaSlow)
+rsi     = ta.rsi(close, i_rsiLen)
+[macdLine, macdSig, _macdHist] = ta.macd(close, i_macdFast, i_macdSlow, i_macdSignal)
+atr     = ta.atr(i_atrLen)
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 3. MULTI-TIMEFRAME (HTF bias via request.security, lookahead_off)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Helper: compute bias on each HTF — batched into a tuple to save request.security calls
+f_htfBias() =>
+    e50  = ta.ema(close, i_emaFast)
+    e200 = ta.ema(close, i_emaSlow)
+    bull = e50 > e200 and close > e200
+    bear = e50 < e200 and close < e200
+    [bull, bear]
+
+[htf1Bull, htf1Bear] = i_enableMTF ? request.security(syminfo.tickerid, i_htf1, f_htfBias(), lookahead=barmerge.lookahead_off) : [true, true]
+[htf2Bull, htf2Bear] = i_enableMTF ? request.security(syminfo.tickerid, i_htf2, f_htfBias(), lookahead=barmerge.lookahead_off) : [true, true]
+
+// Require agreement from both HTFs when filter is enabled
+htfBullBias = not i_enableMTF or (htf1Bull and htf2Bull)
+htfBearBias = not i_enableMTF or (htf1Bear and htf2Bear)
+
+// Also fetch current-TF trend on HTF for dashboard display
+htfDash1Bull = request.security(syminfo.tickerid, i_htf1, close > ta.ema(close, i_emaSlow), lookahead=barmerge.lookahead_off)
+htfDash2Bull = request.security(syminfo.tickerid, i_htf2, close > ta.ema(close, i_emaSlow), lookahead=barmerge.lookahead_off)
+htfD1Bull    = request.security(syminfo.tickerid, "D",    close > ta.ema(close, i_emaSlow), lookahead=barmerge.lookahead_off)
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 4. SMC DETECTION (Order Block + FVG + BOS)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ───── Swing / Pivots ─────
+pivotHigh = ta.pivothigh(high, i_pivotLen, i_pivotLen)
+pivotLow  = ta.pivotlow (low,  i_pivotLen, i_pivotLen)
+
+var float lastSwingHigh = na
+var float lastSwingLow  = na
+var int   lastSwingHighBar = na
+var int   lastSwingLowBar  = na
+
+if not na(pivotHigh)
+    lastSwingHigh    := pivotHigh
+    lastSwingHighBar := bar_index - i_pivotLen
+if not na(pivotLow)
+    lastSwingLow    := pivotLow
+    lastSwingLowBar := bar_index - i_pivotLen
+
+// ───── Break of Structure ─────
+bosBull = not na(lastSwingHigh) and close > lastSwingHigh and close[1] <= lastSwingHigh
+bosBear = not na(lastSwingLow)  and close < lastSwingLow  and close[1] >= lastSwingLow
+
+// ───── Order Block: last opposite-color candle before impulsive break ─────
+var array<box>   obBoxes = array.new<box>()
+var array<float> bullOBTops = array.new<float>()
+var array<float> bullOBBots = array.new<float>()
+var array<float> bearOBTops = array.new<float>()
+var array<float> bearOBBots = array.new<float>()
+
+cleanupBoxes(arr, maxSize) =>
+    while array.size(arr) > maxSize
+        b = array.shift(arr)
+        box.delete(b)
+
+// Bullish OB: last down candle (close<open) before a bull impulse that broke swing high
+if i_enableOB and bosBull
+    // Look back up to 10 bars to find the last bearish candle
+    for i = 1 to 10
+        if close[i] < open[i]
+            obTop = math.max(open[i], close[i])
+            obBot = math.min(low[i], close[i])
+            b = box.new(left=bar_index - i, top=obTop, right=bar_index + i_obExtend, bottom=obBot,
+                 bgcolor=i_colorBullOB, border_color=color.new(#26a69a, 40), xloc=xloc.bar_index)
+            array.push(obBoxes, b)
+            array.push(bullOBTops, obTop)
+            array.push(bullOBBots, obBot)
+            if array.size(bullOBTops) > i_maxZones
+                array.shift(bullOBTops)
+                array.shift(bullOBBots)
+            break
+
+// Bearish OB: last up candle (close>open) before a bear impulse that broke swing low
+if i_enableOB and bosBear
+    for i = 1 to 10
+        if close[i] > open[i]
+            obTop = math.max(high[i], close[i])
+            obBot = math.min(open[i], close[i])
+            b = box.new(left=bar_index - i, top=obTop, right=bar_index + i_obExtend, bottom=obBot,
+                 bgcolor=i_colorBearOB, border_color=color.new(#ef5350, 40), xloc=xloc.bar_index)
+            array.push(obBoxes, b)
+            array.push(bearOBTops, obTop)
+            array.push(bearOBBots, obBot)
+            if array.size(bearOBTops) > i_maxZones
+                array.shift(bearOBTops)
+                array.shift(bearOBBots)
+            break
+
+cleanupBoxes(obBoxes, i_maxZones * 2)
+
+// ───── Fair Value Gap (3-candle imbalance) ─────
+var array<box> fvgBoxes = array.new<box>()
+var array<float> bullFVGTops = array.new<float>()
+var array<float> bullFVGBots = array.new<float>()
+var array<float> bearFVGTops = array.new<float>()
+var array<float> bearFVGBots = array.new<float>()
+
+bullFVG = low > high[2]
+bearFVG = high < low[2]
+
+if i_enableFVG and bullFVG
+    fb = box.new(left=bar_index - 2, top=low, right=bar_index + i_obExtend, bottom=high[2],
+         bgcolor=i_colorFVG, border_color=color.new(color.gray, 30), xloc=xloc.bar_index)
+    array.push(fvgBoxes, fb)
+    array.push(bullFVGTops, low)
+    array.push(bullFVGBots, high[2])
+    if array.size(bullFVGTops) > i_maxZones
+        array.shift(bullFVGTops)
+        array.shift(bullFVGBots)
+
+if i_enableFVG and bearFVG
+    fb = box.new(left=bar_index - 2, top=low[2], right=bar_index + i_obExtend, bottom=high,
+         bgcolor=i_colorFVG, border_color=color.new(color.gray, 30), xloc=xloc.bar_index)
+    array.push(fvgBoxes, fb)
+    array.push(bearFVGTops, low[2])
+    array.push(bearFVGBots, high)
+    if array.size(bearFVGTops) > i_maxZones
+        array.shift(bearFVGTops)
+        array.shift(bearFVGBots)
+
+cleanupBoxes(fvgBoxes, i_maxZones * 2)
+
+// ───── Is price touching a bull/bear zone? (Structure condition) ─────
+isTouchingZone(tops, bots) =>
+    touched = false
+    n = array.size(tops)
+    if n > 0
+        for i = 0 to n - 1
+            top = array.get(tops, i)
+            bot = array.get(bots, i)
+            if low <= top and high >= bot
+                touched := true
+                break
+    touched
+
+smcBullStructure = isTouchingZone(bullOBTops, bullOBBots) or isTouchingZone(bullFVGTops, bullFVGBots) or bosBull
+smcBearStructure = isTouchingZone(bearOBTops, bearOBBots) or isTouchingZone(bearFVGTops, bearFVGBots) or bosBear
+
+// ───── BOS labels ─────
+if i_enableBOS and bosBull
+    label.new(bar_index, high, "BOS ↑", yloc=yloc.abovebar, color=color.new(#26a69a, 20), textcolor=color.white, style=label.style_label_down, size=size.small)
+if i_enableBOS and bosBear
+    label.new(bar_index, low, "BOS ↓", yloc=yloc.belowbar, color=color.new(#ef5350, 20), textcolor=color.white, style=label.style_label_up, size=size.small)
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 5. SESSION FILTER (Bangkok time UTC+7)
+// ═══════════════════════════════════════════════════════════════════════════
+
+inLondon = not na(time(timeframe.period, "1500-0000", "Asia/Bangkok"))
+inNY     = not na(time(timeframe.period, "2000-0500", "Asia/Bangkok"))
+
+activeSession = not i_enableSession or ((i_sessionLondon and inLondon) or (i_sessionNY and inNY))
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 6. SIGNAL ENGINE (3-Condition Confirmation)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Condition 1: Trend
+trendBull = emaFast > emaSlow and htfBullBias
+trendBear = emaFast < emaSlow and htfBearBias
+
+// Condition 2: Momentum (using confirmed closed-bar values [1] → anti-repaint)
+momBull = rsi[1] >= i_rsiBuyMin  and rsi[1] <= i_rsiBuyMax  and macdLine[1] > macdSig[1]
+momBear = rsi[1] >= i_rsiSellMin and rsi[1] <= i_rsiSellMax and macdLine[1] < macdSig[1]
+
+// Condition 3: Structure (SMC) — already computed above
+
+// Prevent duplicate consecutive signals
+var int lastBuyBar  = na
+var int lastSellBar = na
+
+rawBuy  = trendBull and momBull and smcBullStructure and activeSession and barstate.isconfirmed
+rawSell = trendBear and momBear and smcBearStructure and activeSession and barstate.isconfirmed
+
+isBuySignal  = rawBuy  and (na(lastBuyBar)  or bar_index - lastBuyBar  > 3)
+isSellSignal = rawSell and (na(lastSellBar) or bar_index - lastSellBar > 3)
+
+if isBuySignal
+    lastBuyBar := bar_index
+if isSellSignal
+    lastSellBar := bar_index
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 7. RISK MANAGEMENT (SL/TP calculation + line drawing)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Calculate SL: farther of (ATR * mult) and recent swing
+f_calcSL(isBuy, entry) =>
+    atrSL = isBuy ? entry - atr * i_atrMult : entry + atr * i_atrMult
+    swingSL = isBuy ? ta.lowest(low, i_swingLookback) : ta.highest(high, i_swingLookback)
+    if i_useSwingSL
+        isBuy ? math.min(atrSL, swingSL) : math.max(atrSL, swingSL)
+    else
+        atrSL
+
+f_calcTPs(isBuy, entry, sl) =>
+    risk = math.abs(entry - sl)
+    dir  = isBuy ? 1 : -1
+    tp1 = entry + dir * risk * i_rrTP1
+    tp2 = entry + dir * risk * i_rrTP2
+    tp3 = entry + dir * risk * i_rrTP3
+    tp4 = entry + dir * risk * i_rrTP4
+    [tp1, tp2, tp3, tp4]
+
+// State for current active setup (used by dashboard + TP/SL hit alerts)
+var float entryPrice = na
+var float slPrice    = na
+var float tp1Price   = na
+var float tp2Price   = na
+var float tp3Price   = na
+var float tp4Price   = na
+var bool  currentIsBuy = na
+var int   entryBar   = na
+
+// Lines for visualization
+var array<line>  setupLines  = array.new<line>()
+var array<label> setupLabels = array.new<label>()
+
+cleanupSetup() =>
+    while array.size(setupLines) > 0
+        line.delete(array.shift(setupLines))
+    while array.size(setupLabels) > 0
+        label.delete(array.shift(setupLabels))
+
+f_drawLevel(price, txt, col, style) =>
+    l = line.new(bar_index, price, bar_index + i_lineExtend, price, color=col, style=style, width=2, extend=extend.none)
+    lb = label.new(bar_index + i_lineExtend, price, txt + "  " + str.tostring(price, format.mintick),
+         color=color.new(color.black, 100), textcolor=col, style=label.style_label_left, size=size.small)
+    array.push(setupLines, l)
+    array.push(setupLabels, lb)
+
+// Draw setup when a new signal fires
+if isBuySignal or isSellSignal
+    cleanupSetup()
+    entryPrice    := close
+    currentIsBuy  := isBuySignal
+    entryBar      := bar_index
+    slPrice       := f_calcSL(isBuySignal, entryPrice)
+    [t1, t2, t3, t4] = f_calcTPs(isBuySignal, entryPrice, slPrice)
+    tp1Price := t1
+    tp2Price := t2
+    tp3Price := t3
+    tp4Price := t4
+
+    f_drawLevel(entryPrice, "ENTRY", i_colorEntry, line.style_solid)
+    f_drawLevel(slPrice,    "SL",    i_colorSL,    line.style_dashed)
+    f_drawLevel(tp1Price,   "TP1",   i_colorTP1,   line.style_dotted)
+    f_drawLevel(tp2Price,   "TP2",   i_colorTP2,   line.style_dotted)
+    f_drawLevel(tp3Price,   "TP3",   i_colorTP3,   line.style_dotted)
+    f_drawLevel(tp4Price,   "TP4",   i_colorTP4,   line.style_dotted)
+
+// Track TP/SL hits on current setup
+var bool tp1Hit = false
+var bool tp2Hit = false
+var bool tp3Hit = false
+var bool tp4Hit = false
+var bool slHit  = false
+
+if isBuySignal or isSellSignal
+    tp1Hit := false
+    tp2Hit := false
+    tp3Hit := false
+    tp4Hit := false
+    slHit  := false
+
+newTp1Hit = not na(entryPrice) and not tp1Hit and (currentIsBuy ? high >= tp1Price : low <= tp1Price)
+newTp2Hit = not na(entryPrice) and not tp2Hit and (currentIsBuy ? high >= tp2Price : low <= tp2Price)
+newTp3Hit = not na(entryPrice) and not tp3Hit and (currentIsBuy ? high >= tp3Price : low <= tp3Price)
+newTp4Hit = not na(entryPrice) and not tp4Hit and (currentIsBuy ? high >= tp4Price : low <= tp4Price)
+newSlHit  = not na(entryPrice) and not slHit  and (currentIsBuy ? low  <= slPrice  : high >= slPrice)
+
+if newTp1Hit
+    tp1Hit := true
+if newTp2Hit
+    tp2Hit := true
+if newTp3Hit
+    tp3Hit := true
+if newTp4Hit
+    tp4Hit := true
+if newSlHit
+    slHit := true
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 8. AUTO FIBONACCI (swing high ↔ swing low with Golden Zone)
+// ═══════════════════════════════════════════════════════════════════════════
+
+var line[]  fibLines  = array.new<line>()
+var label[] fibLabels = array.new<label>()
+var box     fibGoldenBox = na
+
+cleanupFib() =>
+    while array.size(fibLines) > 0
+        line.delete(array.shift(fibLines))
+    while array.size(fibLabels) > 0
+        label.delete(array.shift(fibLabels))
+    if not na(fibGoldenBox)
+        box.delete(fibGoldenBox)
+        fibGoldenBox := na
+
+f_drawFib(highestVal, lowestVal, startBar) =>
+    cleanupFib()
+    rng  = highestVal - lowestVal
+    levels = array.from(0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0)
+    colors = array.from(color.new(color.gray, 20), color.new(color.blue, 30), color.new(color.aqua, 30), color.new(#ffb300, 20), color.new(#ffb300, 10), color.new(color.purple, 30), color.new(color.gray, 20))
+    for i = 0 to array.size(levels) - 1
+        lvl  = array.get(levels, i)
+        price = highestVal - rng * lvl
+        col  = array.get(colors, i)
+        ln = line.new(startBar, price, bar_index + i_lineExtend, price, color=col, style=line.style_dotted, width=1)
+        lb = label.new(bar_index + i_lineExtend, price, str.tostring(lvl, "0.000") + "  " + str.tostring(price, format.mintick),
+             color=color.new(color.black, 100), textcolor=col, style=label.style_label_left, size=size.small)
+        array.push(fibLines, ln)
+        array.push(fibLabels, lb)
+    if i_highlightGolden
+        goldTop = highestVal - rng * 0.5
+        goldBot = highestVal - rng * 0.618
+        fibGoldenBox := box.new(left=startBar, top=goldTop, right=bar_index + i_lineExtend, bottom=goldBot,
+             bgcolor=i_colorFibGold, border_color=color.new(#ffb300, 50), xloc=xloc.bar_index)
+
+// Redraw Fib when a new pivot forms
+if i_enableFib and (not na(pivotHigh) or not na(pivotLow))
+    hi = ta.highest(high, i_fibLookback)
+    lo = ta.lowest (low,  i_fibLookback)
+    hiBar = bar_index - (i_fibLookback - 1) + ta.highestbars(high, i_fibLookback) + (i_fibLookback - 1)
+    f_drawFib(hi, lo, math.max(hiBar, bar_index - i_fibLookback))
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 9. VISUALS (Arrows + Big Labels)
+// ═══════════════════════════════════════════════════════════════════════════
+
+plotshape(i_showArrows and isBuySignal,  "BUY arrow",  shape.triangleup,   location.belowbar, color.new(color.green, 0), size=size.normal)
+plotshape(i_showArrows and isSellSignal, "SELL arrow", shape.triangledown, location.abovebar, color.new(color.red,   0), size=size.normal)
+
+if i_showBigLabel and isBuySignal
+    label.new(bar_index, low, "🟢 BUY NOW", yloc=yloc.belowbar, color=color.new(color.green, 10),
+         textcolor=color.white, style=label.style_label_up, size=size.large)
+if i_showBigLabel and isSellSignal
+    label.new(bar_index, high, "🔴 SELL NOW", yloc=yloc.abovebar, color=color.new(color.red, 10),
+         textcolor=color.white, style=label.style_label_down, size=size.large)
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 10. DASHBOARD (16 rows, update on barstate.islast only)
+// ═══════════════════════════════════════════════════════════════════════════
+
+dashPosition = switch i_dashPos
+    "Top Left"      => position.top_left
+    "Top Right"     => position.top_right
+    "Bottom Left"   => position.bottom_left
+    "Bottom Right"  => position.bottom_right
+    "Middle Right"  => position.middle_right
+    =>                 position.top_right
+
+var table dash = table.new(dashPosition, 2, 17, bgcolor=color.new(#1e222d, 5), border_width=1, border_color=color.new(#f7b500, 60))
+
+// W/L tracker (count TP1 / SL hits across session)
+var int winCount  = 0
+var int lossCount = 0
+if newTp1Hit
+    winCount += 1
+if newSlHit and not tp1Hit
+    lossCount += 1
+
+f_arrow(isBull) => isBull ? "🟢 ↑" : "🔴 ↓"
+
+if i_showDash and barstate.islast
+    signalText = isBuySignal ? "🟢 BUY" : isSellSignal ? "🔴 SELL" : not na(entryPrice) ? (currentIsBuy ? "🟢 BUY (Running)" : "🔴 SELL (Running)") : "⚪ WAIT"
+    signalColor = isBuySignal or (not na(entryPrice) and currentIsBuy) ? color.new(color.green, 70) : isSellSignal or (not na(entryPrice) and not currentIsBuy) ? color.new(color.red, 70) : color.new(#1e222d, 30)
+
+    // Header
+    table.cell(dash, 0, 0, "👑 CROWN GOLD SIGNAL", text_color=#f7b500, bgcolor=color.new(#1e222d, 0), text_size=size.normal)
+    table.cell(dash, 1, 0, "v1.0",                 text_color=color.gray, bgcolor=color.new(#1e222d, 0), text_size=size.small)
+
+    // Signal block
+    table.cell(dash, 0, 1, "Signal",   text_color=color.white, bgcolor=signalColor)
+    table.cell(dash, 1, 1, signalText, text_color=color.white, bgcolor=signalColor, text_size=size.normal)
+
+    table.cell(dash, 0, 2, "Entry", text_color=color.white, bgcolor=color.new(#1e222d, 30))
+    table.cell(dash, 1, 2, na(entryPrice) ? "—" : str.tostring(entryPrice, format.mintick), text_color=color.white, bgcolor=color.new(#1e222d, 30))
+
+    table.cell(dash, 0, 3, "SL", text_color=color.white, bgcolor=color.new(#1e222d, 10))
+    table.cell(dash, 1, 3, na(slPrice) ? "—" : str.tostring(slPrice, format.mintick) + (slHit ? " 💥" : ""), text_color=i_colorSL, bgcolor=color.new(#1e222d, 10))
+
+    table.cell(dash, 0, 4, "TP1 (R:R " + str.tostring(i_rrTP1) + ")", text_color=color.white, bgcolor=color.new(#1e222d, 30))
+    table.cell(dash, 1, 4, na(tp1Price) ? "—" : str.tostring(tp1Price, format.mintick) + (tp1Hit ? " ✅" : ""), text_color=i_colorTP1, bgcolor=color.new(#1e222d, 30))
+
+    table.cell(dash, 0, 5, "TP2 (R:R " + str.tostring(i_rrTP2) + ")", text_color=color.white, bgcolor=color.new(#1e222d, 10))
+    table.cell(dash, 1, 5, na(tp2Price) ? "—" : str.tostring(tp2Price, format.mintick) + (tp2Hit ? " ✅" : ""), text_color=i_colorTP2, bgcolor=color.new(#1e222d, 10))
+
+    table.cell(dash, 0, 6, "TP3 (R:R " + str.tostring(i_rrTP3) + ")", text_color=color.white, bgcolor=color.new(#1e222d, 30))
+    table.cell(dash, 1, 6, na(tp3Price) ? "—" : str.tostring(tp3Price, format.mintick) + (tp3Hit ? " ✅" : ""), text_color=i_colorTP3, bgcolor=color.new(#1e222d, 30))
+
+    table.cell(dash, 0, 7, "TP4 (R:R " + str.tostring(i_rrTP4) + ")", text_color=color.white, bgcolor=color.new(#1e222d, 10))
+    table.cell(dash, 1, 7, na(tp4Price) ? "—" : str.tostring(tp4Price, format.mintick) + (tp4Hit ? " ✅" : ""), text_color=i_colorTP4, bgcolor=color.new(#1e222d, 10))
+
+    // Multi-TF trend
+    table.cell(dash, 0, 8, "Trend " + i_htf1, text_color=color.white, bgcolor=color.new(#1e222d, 30))
+    table.cell(dash, 1, 8, f_arrow(htfDash1Bull), text_color=color.white, bgcolor=color.new(#1e222d, 30))
+
+    table.cell(dash, 0, 9, "Trend " + i_htf2, text_color=color.white, bgcolor=color.new(#1e222d, 10))
+    table.cell(dash, 1, 9, f_arrow(htfDash2Bull), text_color=color.white, bgcolor=color.new(#1e222d, 10))
+
+    table.cell(dash, 0, 10, "Trend D",       text_color=color.white, bgcolor=color.new(#1e222d, 30))
+    table.cell(dash, 1, 10, f_arrow(htfD1Bull), text_color=color.white, bgcolor=color.new(#1e222d, 30))
+
+    // Indicators
+    table.cell(dash, 0, 11, "RSI (" + str.tostring(i_rsiLen) + ")", text_color=color.white, bgcolor=color.new(#1e222d, 10))
+    table.cell(dash, 1, 11, str.tostring(rsi, "#.##"), text_color=color.white, bgcolor=color.new(#1e222d, 10))
+
+    table.cell(dash, 0, 12, "ATR (" + str.tostring(i_atrLen) + ")", text_color=color.white, bgcolor=color.new(#1e222d, 30))
+    table.cell(dash, 1, 12, str.tostring(atr, format.mintick), text_color=color.white, bgcolor=color.new(#1e222d, 30))
+
+    // Session
+    sessionText = not i_enableSession ? "Always" : inLondon ? "🇬🇧 London" : inNY ? "🇺🇸 NY" : "😴 Off"
+    table.cell(dash, 0, 13, "Session",    text_color=color.white, bgcolor=color.new(#1e222d, 10))
+    table.cell(dash, 1, 13, sessionText,  text_color=color.white, bgcolor=color.new(#1e222d, 10))
+
+    // Tracker
+    total = winCount + lossCount
+    wlText = total == 0 ? "—" : str.tostring(winCount) + "W / " + str.tostring(lossCount) + "L"
+    table.cell(dash, 0, 14, "W/L (session)", text_color=color.white, bgcolor=color.new(#1e222d, 30))
+    table.cell(dash, 1, 14, wlText, text_color=color.white, bgcolor=color.new(#1e222d, 30))
+
+    // Symbol
+    table.cell(dash, 0, 15, "Symbol", text_color=color.gray, bgcolor=color.new(#1e222d, 10))
+    table.cell(dash, 1, 15, syminfo.ticker, text_color=color.white, bgcolor=color.new(#1e222d, 10))
+
+    // Footer
+    table.cell(dash, 0, 16, "Crown FX Automation", text_color=color.new(#f7b500, 30), bgcolor=color.new(#1e222d, 0), text_size=size.tiny)
+    table.cell(dash, 1, 16, "👑 Premium",          text_color=color.new(#f7b500, 30), bgcolor=color.new(#1e222d, 0), text_size=size.tiny)
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 11. ALERTS (basic alertcondition + JSON webhook via alert())
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ───── Alertcondition (shown in TradingView's Create Alert dialog) ─────
+alertcondition(isBuySignal,  title="Crown Gold — BUY",  message="👑 BUY {{ticker}} @ {{close}}")
+alertcondition(isSellSignal, title="Crown Gold — SELL", message="👑 SELL {{ticker}} @ {{close}}")
+alertcondition(newTp1Hit, title="TP1 Hit", message="✅ TP1 hit on {{ticker}}")
+alertcondition(newTp2Hit, title="TP2 Hit", message="✅ TP2 hit on {{ticker}}")
+alertcondition(newTp3Hit, title="TP3 Hit", message="✅ TP3 hit on {{ticker}}")
+alertcondition(newTp4Hit, title="TP4 Hit", message="✅ TP4 hit on {{ticker}}")
+alertcondition(newSlHit,  title="SL Hit",  message="💥 SL hit on {{ticker}}")
+
+// Pre-alert: 2/3 conditions met (trend + momentum without structure yet)
+preBuy  = trendBull and momBull and not smcBullStructure
+preSell = trendBear and momBear and not smcBearStructure
+alertcondition(preBuy,  title="Pre-BUY (2/3)",  message="⚠️ Pre-BUY setup on {{ticker}} — waiting for SMC structure")
+alertcondition(preSell, title="Pre-SELL (2/3)", message="⚠️ Pre-SELL setup on {{ticker}} — waiting for SMC structure")
+
+// ───── alert() with JSON webhook payload (Line / Discord / Telegram) ─────
+f_jsonSetup(side) =>
+    '{"product":"Crown Gold Signal","symbol":"' + syminfo.ticker +
+      '","tf":"' + timeframe.period +
+      '","side":"' + side +
+      '","entry":' + str.tostring(close, format.mintick) +
+      ',"sl":'  + str.tostring(f_calcSL(side == "BUY", close), format.mintick) +
+      ',"time":"' + str.format_time(time, "yyyy-MM-dd HH:mm:ss", "Asia/Bangkok") + '"}'
+
+if isBuySignal
+    alert(f_jsonSetup("BUY"), alert.freq_once_per_bar_close)
+if isSellSignal
+    alert(f_jsonSetup("SELL"), alert.freq_once_per_bar_close)
+if newTp1Hit
+    alert('{"product":"Crown Gold Signal","symbol":"' + syminfo.ticker + '","event":"TP1_HIT","price":' + str.tostring(tp1Price, format.mintick) + '}', alert.freq_once_per_bar_close)
+if newSlHit
+    alert('{"product":"Crown Gold Signal","symbol":"' + syminfo.ticker + '","event":"SL_HIT","price":' + str.tostring(slPrice, format.mintick) + '}', alert.freq_once_per_bar_close)

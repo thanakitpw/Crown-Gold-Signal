@@ -1,0 +1,34 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Claude Code local state (keep agents/, skip cache)
+.claude/cache/
+.claude/session*
+.claude/tmp/
+
+# Secrets / credentials
+.env
+.env.local
+*.key
+*.pem
+credentials.json
+
+# Assets (large files — use Git LFS or external storage)
+assets/demo_videos/*.mp4
+assets/demo_videos/*.mov
+assets/screenshots/*.psd
+
+# Build artifacts (if ever added)
+dist/
+build/
+node_modules/
