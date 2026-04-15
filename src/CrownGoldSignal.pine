@@ -73,11 +73,18 @@ i_highlightGolden = input.bool(true, "Highlight Golden Zone (0.5-0.618)", group=
 i_highlightOTE    = input.bool(true, "Highlight OTE Zone (78.6-88.6) ⭐", group=G_FIB, tooltip="⭐ Deep Retracement Zone — ใช้ได้ผลดีมากกับทอง (XAUUSD) เพราะทองย่อแรง")
 i_requireOTE      = input.bool(false, "Require Price in OTE Zone for Signal", group=G_FIB, tooltip="เปิด = signal เกิดเฉพาะเมื่อราคาอยู่ในโซน OTE (78.6-88.6) — แม่นที่สุดแต่ signal น้อย")
 
-// ───── ⏰ Session Filter ─────
-G_SESSION = "⏰ Session Filter"
-i_enableSession = input.bool(false, "Enable Session Filter", group=G_SESSION, tooltip="เทรดเฉพาะ London + NY (ปิดช่วง Asia sideways)")
-i_sessionLondon = input.bool(true, "Include London Session",  group=G_SESSION, tooltip="15:00-00:00 Bangkok")
-i_sessionNY     = input.bool(true, "Include New York Session", group=G_SESSION, tooltip="20:00-05:00 Bangkok")
+// ───── ⏰ Session Filter + Kill Zone ─────
+G_SESSION = "⏰ Session / Kill Zone"
+i_enableSession = input.bool(true,  "Enable Session Filter", group=G_SESSION, tooltip="เทรดเฉพาะ London + NY (ปิดช่วง Asia sideways)")
+i_useKZ         = input.bool(false, "Use narrow Kill Zone times ⭐", group=G_SESSION, tooltip="⭐ ใช้ช่วงเวลาที่ gold spike แรงที่สุด: London 14:00-17:00 + NY 19:30-23:00 — WR สูงขึ้นมาก")
+i_sessionLondon = input.bool(true, "Include London", group=G_SESSION)
+i_sessionNY     = input.bool(true, "Include New York", group=G_SESSION)
+
+// ───── 🎯 Advanced Signal Triggers ─────
+G_ADV = "🎯 Advanced Signals"
+i_enableLiqSweep = input.bool(true, "Enable Liquidity Sweep Entry ⭐", group=G_ADV, tooltip="⭐ ราคา wick ทะลุ swing H/L แล้วกลับ = สถาบันเก็บ stop loss — entry แม่นมากบน gold")
+i_enableHiddenDiv = input.bool(true, "Enable Hidden Divergence ⭐", group=G_ADV, tooltip="⭐ Hidden Div (HL + RSI LL) = continuation signal ตาม trend — ถี่กว่า regular div 2 เท่า")
+i_htfMinScore    = input.int(2, "HTF Min Score (−4 to +4)", minval=-4, maxval=4, group=G_ADV, tooltip="ระบบ scoring: HTF bull=+2, neutral=+1, bear=-2 — ต้องการ score ≥ นี้เพื่อ BUY / ≤ −นี้เพื่อ SELL")
 
 // ───── 📱 Dashboard ─────
 G_DASH = "📱 Dashboard"
@@ -270,13 +277,78 @@ if i_enableBOS and bosBear
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 5. SESSION FILTER (Bangkok time UTC+7)
+// 5. SESSION / KILL ZONE FILTER (Bangkok time UTC+7)
 // ═══════════════════════════════════════════════════════════════════════════
+// Session (wide): London 15:00-00:00, NY 20:00-05:00
+// Kill Zone (narrow): London 14:00-17:00, NY 19:30-23:00  ← gold spikes most
 
-inLondon = not na(time(timeframe.period, "1500-0000", "Asia/Bangkok"))
-inNY     = not na(time(timeframe.period, "2000-0500", "Asia/Bangkok"))
+londonSess = i_useKZ ? "1400-1700" : "1500-0000"
+nySess     = i_useKZ ? "1930-2300" : "2000-0500"
+
+inLondon = not na(time(timeframe.period, londonSess, "Asia/Bangkok"))
+inNY     = not na(time(timeframe.period, nySess,     "Asia/Bangkok"))
 
 activeSession = not i_enableSession or ((i_sessionLondon and inLondon) or (i_sessionNY and inNY))
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 5.2. LIQUIDITY SWEEP DETECTION (stop hunt — institutional entry pattern)
+// ═══════════════════════════════════════════════════════════════════════════
+// Bullish sweep: price wicks below recent swing low, closes back above
+// Bearish sweep: price wicks above recent swing high, closes back below
+// These mark stop-hunts where institutions grab liquidity before reversing
+
+bullSweep = i_enableLiqSweep and not na(lastSwingLow)  and low  < lastSwingLow  and close > lastSwingLow
+bearSweep = i_enableLiqSweep and not na(lastSwingHigh) and high > lastSwingHigh and close < lastSwingHigh
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 5.3. HIDDEN DIVERGENCE (RSI pivot-based, continuation signal)
+// ═══════════════════════════════════════════════════════════════════════════
+// Hidden Bullish: price HL + RSI LL (uptrend continuation — fires trend-follow entry)
+// Hidden Bearish: price LH + RSI HH (downtrend continuation)
+// Pivot-based → NO repaint (uses i_pivotLen confirmed bars back)
+
+var float prevPivotLow  = na
+var float lastPivotLow  = na
+var float prevPivotLowRsi = na
+var float lastPivotLowRsi = na
+var float prevPivotHigh = na
+var float lastPivotHigh = na
+var float prevPivotHighRsi = na
+var float lastPivotHighRsi = na
+
+if not na(pivotLow)
+    prevPivotLow     := lastPivotLow
+    prevPivotLowRsi  := lastPivotLowRsi
+    lastPivotLow     := pivotLow
+    lastPivotLowRsi  := rsi[i_pivotLen]   // RSI at the pivot bar
+if not na(pivotHigh)
+    prevPivotHigh    := lastPivotHigh
+    prevPivotHighRsi := lastPivotHighRsi
+    lastPivotHigh    := pivotHigh
+    lastPivotHighRsi := rsi[i_pivotLen]
+
+newPivotLow  = not na(pivotLow)  and not na(prevPivotLow)  and not na(prevPivotLowRsi)
+newPivotHigh = not na(pivotHigh) and not na(prevPivotHigh) and not na(prevPivotHighRsi)
+
+// Hidden Bullish Div: price making HL + RSI making LL
+hiddenDivBull = i_enableHiddenDiv and newPivotLow  and lastPivotLow  > prevPivotLow  and lastPivotLowRsi  < prevPivotLowRsi
+hiddenDivBear = i_enableHiddenDiv and newPivotHigh and lastPivotHigh < prevPivotHigh and lastPivotHighRsi > prevPivotHighRsi
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 5.4. HTF SCORING SYSTEM (replaces hard HTF alignment)
+// ═══════════════════════════════════════════════════════════════════════════
+// Each HTF contributes: +2 bull, +1 neutral, -2 bear. Total range: -4..+4
+// Signal requires score >= i_htfMinScore (for BUY) or <= -i_htfMinScore (for SELL)
+
+htf1Score = htf1BullRaw ? 2 : htf1BearRaw ? -2 : 1
+htf2Score = htf2BullRaw ? 2 : htf2BearRaw ? -2 : 1
+htfTotalScore = htf1Score + htf2Score
+
+htfScorePassBull = not i_enableMTF or htfTotalScore >=  i_htfMinScore
+htfScorePassBear = not i_enableMTF or htfTotalScore <= -i_htfMinScore
 
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -300,32 +372,42 @@ inOTEZone = not na(oteZoneTop) and not na(oteZoneBot) and low <= oteZoneTop and 
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ───── Signal Mode Overrides ─────
-// Mode wins over user toggles. Premium = strict, Active = balanced, Scalper = wide.
+// Premium = strict (all filters on), Active = balanced, Scalper = wide RSI
 isPremium = i_signalMode == "💎 Premium OTE"
 isActive  = i_signalMode == "🔥 Active Gold"
 isScalper = i_signalMode == "⚡ Scalper"
 
-// Effective filters
-effHTFBull    = isPremium ? (htf1Bull and htf2Bull) : true
-effHTFBear    = isPremium ? (htf1Bear and htf2Bear) : true
+// Effective filters per mode
+effHTFBull    = isPremium ? htfScorePassBull : true
+effHTFBear    = isPremium ? htfScorePassBear : true
 effRequireSMC = isPremium
 effRequireOTE = isPremium or i_requireOTE
 effRsiBuyMin  = isScalper ? 40 : i_rsiBuyMin
 effRsiBuyMax  = isScalper ? 80 : i_rsiBuyMax
 effRsiSellMin = isScalper ? 20 : i_rsiSellMin
 effRsiSellMax = isScalper ? 60 : i_rsiSellMax
+// Active/Scalper also use HTF scoring (soft) instead of Premium's strict alignment
+effActiveHTFBull = htfScorePassBull
+effActiveHTFBear = htfScorePassBear
 
-// Condition 1: Trend
-trendBull = emaFast > emaSlow and effHTFBull
-trendBear = emaFast < emaSlow and effHTFBear
+// Condition 1: Trend (uses scoring — not hard alignment)
+trendBull = emaFast > emaSlow and (isPremium ? effHTFBull : effActiveHTFBull)
+trendBear = emaFast < emaSlow and (isPremium ? effHTFBear : effActiveHTFBear)
 
 // Condition 2: Momentum (anti-repaint: [1] closed-bar values)
 momBull = rsi[1] >= effRsiBuyMin  and rsi[1] <= effRsiBuyMax  and macdLine[1] > macdSig[1]
 momBear = rsi[1] >= effRsiSellMin and rsi[1] <= effRsiSellMax and macdLine[1] < macdSig[1]
 
-// Condition 3: Structure (required only in Premium mode)
+// Condition 3: Structure — ADDITIVE triggers (SMC OR Liquidity Sweep OR Hidden Div)
+// Any one of these is enough to fire signal when combined with Trend + Momentum
+structureBull = smcBullStructure or bullSweep or hiddenDivBull
+structureBear = smcBearStructure or bearSweep or hiddenDivBear
+
+// Premium mode requires original SMC; Active/Scalper use wider additive structure
 smcCheckBull = not effRequireSMC or smcBullStructure
 smcCheckBear = not effRequireSMC or smcBearStructure
+structureOk_Bull = isPremium ? smcCheckBull : structureBull
+structureOk_Bear = isPremium ? smcCheckBear : structureBear
 
 // OTE zone filter (Premium only by default, or user-forced)
 oteFilter = not effRequireOTE or inOTEZone
@@ -334,8 +416,8 @@ oteFilter = not effRequireOTE or inOTEZone
 var int lastBuyBar  = na
 var int lastSellBar = na
 
-rawBuy  = trendBull and momBull and smcCheckBull and activeSession and oteFilter and barstate.isconfirmed
-rawSell = trendBear and momBear and smcCheckBear and activeSession and oteFilter and barstate.isconfirmed
+rawBuy  = trendBull and momBull and structureOk_Bull and activeSession and oteFilter and barstate.isconfirmed
+rawSell = trendBear and momBear and structureOk_Bear and activeSession and oteFilter and barstate.isconfirmed
 
 isBuySignal  = rawBuy  and (na(lastBuyBar)  or bar_index - lastBuyBar  > 3)
 isSellSignal = rawSell and (na(lastSellBar) or bar_index - lastSellBar > 3)
@@ -603,11 +685,17 @@ alertcondition(newTp3Hit, title="TP3 Hit", message="✅ TP3 hit on {{ticker}}")
 alertcondition(newTp4Hit, title="TP4 Hit", message="✅ TP4 hit on {{ticker}}")
 alertcondition(newSlHit,  title="SL Hit",  message="💥 SL hit on {{ticker}}")
 
-// Pre-alert: 2/3 conditions met (trend + momentum without structure yet)
-preBuy  = trendBull and momBull and not smcBullStructure
-preSell = trendBear and momBear and not smcBearStructure
-alertcondition(preBuy,  title="Pre-BUY (2/3)",  message="⚠️ Pre-BUY setup on {{ticker}} — waiting for SMC structure")
-alertcondition(preSell, title="Pre-SELL (2/3)", message="⚠️ Pre-SELL setup on {{ticker}} — waiting for SMC structure")
+// Pre-alert: trend + momentum ready, waiting for structure trigger
+preBuy  = trendBull and momBull and not structureOk_Bull
+preSell = trendBear and momBear and not structureOk_Bear
+alertcondition(preBuy,  title="Pre-BUY (2/3)",  message="⚠️ Pre-BUY setup on {{ticker}} — waiting for structure trigger")
+alertcondition(preSell, title="Pre-SELL (2/3)", message="⚠️ Pre-SELL setup on {{ticker}} — waiting for structure trigger")
+
+// Liquidity Sweep + Hidden Divergence alerts (standalone entry hints)
+alertcondition(bullSweep,     title="🎯 Bullish Liquidity Sweep", message="🎯 {{ticker}} swept low — potential reversal long")
+alertcondition(bearSweep,     title="🎯 Bearish Liquidity Sweep", message="🎯 {{ticker}} swept high — potential reversal short")
+alertcondition(hiddenDivBull, title="📊 Hidden Bullish Divergence", message="📊 {{ticker}} HL+RSI LL — trend continuation BUY")
+alertcondition(hiddenDivBear, title="📊 Hidden Bearish Divergence", message="📊 {{ticker}} LH+RSI HH — trend continuation SELL")
 
 // OTE Zone alert — price entered deep retracement zone (gold-specific high-probability entry)
 oteEntered = inOTEZone and not inOTEZone[1]

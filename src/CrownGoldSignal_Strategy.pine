@@ -64,14 +64,20 @@ i_enableFVG = input.bool(true, "Use FVG Structure", group=G_SMC)
 i_pivotLen  = input.int(5, "Pivot Lookback", group=G_SMC)
 i_maxZones  = input.int(5, "Max SMC Zones", group=G_SMC)
 
-G_SESSION = "⏰ Session Filter"
-i_enableSession = input.bool(false, "Enable Session Filter", group=G_SESSION)
-i_sessionLondon = input.bool(true, "Include London Session",  group=G_SESSION)
-i_sessionNY     = input.bool(true, "Include New York Session", group=G_SESSION)
+G_SESSION = "⏰ Session / Kill Zone"
+i_enableSession = input.bool(true,  "Enable Session Filter", group=G_SESSION)
+i_useKZ         = input.bool(false, "Use narrow Kill Zone times ⭐", group=G_SESSION, tooltip="⭐ London 14-17 + NY 19:30-23 (gold spike peak)")
+i_sessionLondon = input.bool(true, "Include London", group=G_SESSION)
+i_sessionNY     = input.bool(true, "Include New York", group=G_SESSION)
 
 G_FIB = "📐 Fibonacci OTE"
 i_fibLookback = input.int(50, "Fib Swing Lookback", minval=10, maxval=500, group=G_FIB)
-i_requireOTE  = input.bool(false, "Require Price in OTE Zone (78.6-88.6) ⭐", group=G_FIB, tooltip="⭐ Gold Deep Retracement — entry เฉพาะเมื่อราคาอยู่ในโซน OTE (winrate สูงสุด)")
+i_requireOTE  = input.bool(false, "Require Price in OTE Zone (78.6-88.6) ⭐", group=G_FIB, tooltip="⭐ Gold Deep Retracement — entry เฉพาะเมื่อราคาอยู่ในโซน OTE")
+
+G_ADV = "🎯 Advanced Signals"
+i_enableLiqSweep  = input.bool(true, "Enable Liquidity Sweep ⭐", group=G_ADV)
+i_enableHiddenDiv = input.bool(true, "Enable Hidden Divergence ⭐", group=G_ADV)
+i_htfMinScore     = input.int(2, "HTF Min Score (−4 to +4)", minval=-4, maxval=4, group=G_ADV)
 
 G_POS = "📐 Position Management"
 i_tp1Pct = input.float(30, "TP1 Close %", minval=0, maxval=100, group=G_POS, tooltip="ปิดกี่ % ของ position ที่ TP1")
@@ -193,11 +199,13 @@ smcBearStructure = isTouchingZone(bearOBTops, bearOBBots) or isTouchingZone(bear
 // 4. SESSION FILTER
 // ═══════════════════════════════════════════════════════════════════════════
 
-inLondon = not na(time(timeframe.period, "1500-0000", "Asia/Bangkok"))
-inNY     = not na(time(timeframe.period, "2000-0500", "Asia/Bangkok"))
+londonSess = i_useKZ ? "1400-1700" : "1500-0000"
+nySess     = i_useKZ ? "1930-2300" : "2000-0500"
+inLondon   = not na(time(timeframe.period, londonSess, "Asia/Bangkok"))
+inNY       = not na(time(timeframe.period, nySess,     "Asia/Bangkok"))
 activeSession = not i_enableSession or ((i_sessionLondon and inLondon) or (i_sessionNY and inNY))
 
-// OTE Zone (Deep Retracement 78.6-88.6 — gold-specific edge)
+// OTE Zone (Deep Retracement 78.6-88.6)
 oteHi      = ta.highest(high, i_fibLookback)
 oteLo      = ta.lowest (low,  i_fibLookback)
 oteRng     = oteHi - oteLo
@@ -205,6 +213,39 @@ oteZoneTop = oteHi - oteRng * 0.786
 oteZoneBot = oteHi - oteRng * 0.886
 inOTEZone  = not na(oteZoneTop) and not na(oteZoneBot) and low <= oteZoneTop and high >= oteZoneBot
 oteFilter  = not i_requireOTE or inOTEZone
+
+// Liquidity Sweep (stop hunt)
+bullSweep = i_enableLiqSweep and not na(lastSwingLow)  and low  < lastSwingLow  and close > lastSwingLow
+bearSweep = i_enableLiqSweep and not na(lastSwingHigh) and high > lastSwingHigh and close < lastSwingHigh
+
+// Hidden Divergence — pivot-based (no repaint)
+var float prevPivotLow_s     = na
+var float lastPivotLow_s     = na
+var float prevPivotLowRsi_s  = na
+var float lastPivotLowRsi_s  = na
+var float prevPivotHigh_s    = na
+var float lastPivotHigh_s    = na
+var float prevPivotHighRsi_s = na
+var float lastPivotHighRsi_s = na
+if not na(pivotLow)
+    prevPivotLow_s    := lastPivotLow_s
+    prevPivotLowRsi_s := lastPivotLowRsi_s
+    lastPivotLow_s    := pivotLow
+    lastPivotLowRsi_s := rsi[i_pivotLen]
+if not na(pivotHigh)
+    prevPivotHigh_s    := lastPivotHigh_s
+    prevPivotHighRsi_s := lastPivotHighRsi_s
+    lastPivotHigh_s    := pivotHigh
+    lastPivotHighRsi_s := rsi[i_pivotLen]
+hiddenDivBull = i_enableHiddenDiv and not na(pivotLow)  and not na(prevPivotLow_s)  and not na(prevPivotLowRsi_s)  and lastPivotLow_s  > prevPivotLow_s  and lastPivotLowRsi_s  < prevPivotLowRsi_s
+hiddenDivBear = i_enableHiddenDiv and not na(pivotHigh) and not na(prevPivotHigh_s) and not na(prevPivotHighRsi_s) and lastPivotHigh_s < prevPivotHigh_s and lastPivotHighRsi_s > prevPivotHighRsi_s
+
+// HTF scoring
+htf1Score = htf1BullRaw ? 2 : htf1BearRaw ? -2 : 1
+htf2Score = htf2BullRaw ? 2 : htf2BearRaw ? -2 : 1
+htfTotalScore = htf1Score + htf2Score
+htfScorePassBull = not i_enableMTF or htfTotalScore >=  i_htfMinScore
+htfScorePassBear = not i_enableMTF or htfTotalScore <= -i_htfMinScore
 
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -216,8 +257,6 @@ isPremium = i_signalMode == "💎 Premium OTE"
 isActive  = i_signalMode == "🔥 Active Gold"
 isScalper = i_signalMode == "⚡ Scalper"
 
-effHTFBull    = isPremium ? (htf1Bull and htf2Bull) : true
-effHTFBear    = isPremium ? (htf1Bear and htf2Bear) : true
 effRequireSMC = isPremium
 effRequireOTE = isPremium or i_requireOTE
 effRsiBuyMin  = isScalper ? 40 : i_rsiBuyMin
@@ -225,18 +264,26 @@ effRsiBuyMax  = isScalper ? 80 : i_rsiBuyMax
 effRsiSellMin = isScalper ? 20 : i_rsiSellMin
 effRsiSellMax = isScalper ? 60 : i_rsiSellMax
 
-trendBull = emaFast > emaSlow and effHTFBull
-trendBear = emaFast < emaSlow and effHTFBear
+// Trend (uses HTF scoring — softer than hard alignment)
+trendBull = emaFast > emaSlow and htfScorePassBull
+trendBear = emaFast < emaSlow and htfScorePassBear
 
 momBull = rsi[1] >= effRsiBuyMin  and rsi[1] <= effRsiBuyMax  and macdLine[1] > macdSig[1]
 momBear = rsi[1] >= effRsiSellMin and rsi[1] <= effRsiSellMax and macdLine[1] < macdSig[1]
 
+// Additive structure triggers: SMC OR Liquidity Sweep OR Hidden Divergence
+structureBull = smcBullStructure or bullSweep or hiddenDivBull
+structureBear = smcBearStructure or bearSweep or hiddenDivBear
+
 smcCheckBull = not effRequireSMC or smcBullStructure
 smcCheckBear = not effRequireSMC or smcBearStructure
+structureOk_Bull = isPremium ? smcCheckBull : structureBull
+structureOk_Bear = isPremium ? smcCheckBear : structureBear
+
 oteFilterEff = not effRequireOTE or inOTEZone
 
-isBuySignal  = trendBull and momBull and smcCheckBull and activeSession and oteFilterEff and barstate.isconfirmed and inDateWindow
-isSellSignal = trendBear and momBear and smcCheckBear and activeSession and oteFilterEff and barstate.isconfirmed and inDateWindow
+isBuySignal  = trendBull and momBull and structureOk_Bull and activeSession and oteFilterEff and barstate.isconfirmed and inDateWindow
+isSellSignal = trendBear and momBear and structureOk_Bear and activeSession and oteFilterEff and barstate.isconfirmed and inDateWindow
 
 
 // ═══════════════════════════════════════════════════════════════════════════
