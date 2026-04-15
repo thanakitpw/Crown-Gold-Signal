@@ -120,8 +120,13 @@ f_htfBias() =>
     bear = e50 < e200 and close < e200
     [bull, bear]
 
-[htf1Bull, htf1Bear] = i_enableMTF ? request.security(syminfo.tickerid, i_htf1, f_htfBias(), lookahead=barmerge.lookahead_off) : [true, true]
-[htf2Bull, htf2Bear] = i_enableMTF ? request.security(syminfo.tickerid, i_htf2, f_htfBias(), lookahead=barmerge.lookahead_off) : [true, true]
+[htf1BullRaw, htf1BearRaw] = request.security(syminfo.tickerid, i_htf1, f_htfBias(), lookahead=barmerge.lookahead_off)
+[htf2BullRaw, htf2BearRaw] = request.security(syminfo.tickerid, i_htf2, f_htfBias(), lookahead=barmerge.lookahead_off)
+
+htf1Bull = i_enableMTF ? htf1BullRaw : true
+htf1Bear = i_enableMTF ? htf1BearRaw : true
+htf2Bull = i_enableMTF ? htf2BullRaw : true
+htf2Bear = i_enableMTF ? htf2BearRaw : true
 
 // Require agreement from both HTFs when filter is enabled
 htfBullBias = not i_enableMTF or (htf1Bull and htf2Bull)
